@@ -104,3 +104,85 @@ resource "aws_config_delivery_channel" "config_delivery_channel" {
     aws_config_configuration_recorder.config_recorder
   ]
 }
+
+resource "aws_config_config_rule" "s3_public_read_prohibited" {
+  name = "s3-public-read-prohibited"
+
+  source {
+    owner             = "AWS"
+    source_identifier = "S3_BUCKET_PUBLIC_READ_PROHIBITED"
+  }
+
+  depends_on = [
+    aws_config_delivery_channel.config_delivery_channel
+  ]
+}
+
+resource "aws_cloudwatch_event_rule" "config_non_compliant_rule" {
+  name        = "config-non-compliant-rule"
+  description = "Trigger when AWS Config marks an S3 bucket as NON_COMPLIANT"
+
+  event_pattern = jsonencode({
+    source      = ["aws.config"]
+    detail-type = ["Config Rules Compliance Change"]
+    detail = {
+      newEvaluationResult = {
+        complianceType = ["NON_COMPLIANT"]
+      }
+      configRuleName = [
+        aws_config_config_rule.s3_public_read_prohibited.name
+      ]
+    }
+  })
+}
+
+data "archive_file" "lambda_zip" {
+  type        = "zip"
+  source_file = "${path.module}/lambda_function.py"
+  output_path = "${path.module}/lambda_function.zip"
+}
+
+resource "aws_iam_role" "lambda_role" {
+  name = "s3-remediation-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Principal = {
+          Service = "lambda.amazonaws.com"
+        }
+        Action = "sts:AssumeRole"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_basic_execution" {
+  role       = aws_iam_role.lambda_role.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
+
+resource "aws_lambda_function" "s3_remediation_lambda" {
+  function_name = "s3-public-access-remediation"
+  role          = aws_iam_role.lambda_role.arn
+  handler       = "lambda_function.lambda_handler"
+  runtime       = "python3.12"
+
+  filename         = data.archive_file.lambda_zip.output_path
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
+}
+
+resource "aws_cloudwatch_event_target" "lambda_target" {
+  rule = aws_cloudwatch_event_rule.config_non_compliant_rule.name
+  arn  = aws_lambda_function.s3_remediation_lambda.arn
+}
+
+resource "aws_lambda_permission" "allow_eventbridge" {
+  statement_id  = "AllowExecutionFromEventBridge"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.s3_remediation_lambda.function_name
+  principal     = "events.amazonaws.com"
+  source_arn    = aws_cloudwatch_event_rule.config_non_compliant_rule.arn
+}
