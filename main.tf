@@ -186,3 +186,21 @@ resource "aws_lambda_permission" "allow_eventbridge" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.config_non_compliant_rule.arn
 }
+
+resource "aws_iam_role_policy" "lambda_s3_remediation_policy" {
+  name = "lambda-s3-remediation-policy"
+  role = aws_iam_role.lambda_role.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:PutBucketPublicAccessBlock"
+        ]
+        Resource = "*"
+      }
+    ]
+  })
+}

@@ -6,3 +6,5 @@ terraform.tfvars
 crash.log
 __pycache__/
 *.zip
+lambda_function.zip
+terraform.tfstate.backup
